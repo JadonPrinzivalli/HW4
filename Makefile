@@ -1,10 +1,19 @@
-all:
-	g++ -Wall -g -O0 Sim.cpp Sim_Math.cpp TimeCode.cpp TimeCodeTests.cpp BigInteger.cpp -o traffic-simulation -lsqlite3 -I/usr/include
+CXX = g++
+# -O2 lets the compiler remove extra work after the code improvements.
+# Use make CXXFLAGS="-Wall -g -O0" to compare algorithms without optimization.
+# Source: ChatGPT assistance; https://clang.llvm.org/docs/CommandGuide/clang.html
+CXXFLAGS = -Wall -g -O2 -std=c++11
+LDLIBS = -lsqlite3
 
+.PHONY: all clean
 
-tests: Tests.cpp Sim_Math.cpp TimeCode.cpp TimeCodeTests.cpp BigInteger.cpp BigIntegerTests.cpp 
-	g++ -Wall -g -O0 Tests.cpp Sim_Math.cpp TimeCode.cpp TimeCodeTests.cpp BigInteger.cpp BigIntegerTests.cpp -o tests -lsqlite3 -I/usr/include
+all: traffic-simulation
 
-	
+traffic-simulation: Sim.cpp Sim_Math.cpp TimeCode.cpp BigInteger.cpp Sim_Math.h TimeCode.h BigInteger.h
+	$(CXX) $(CXXFLAGS) Sim.cpp Sim_Math.cpp TimeCode.cpp BigInteger.cpp -o $@ $(LDLIBS)
+
+tests: Tests.cpp Sim_Math.cpp TimeCode.cpp TimeCodeTests.cpp BigInteger.cpp BigIntegerTests.cpp Sim_Math.h TimeCode.h TimeCode_Tests.h BigInteger.h BigInteger_Tests.h
+	$(CXX) $(CXXFLAGS) Tests.cpp Sim_Math.cpp TimeCode.cpp TimeCodeTests.cpp BigInteger.cpp BigIntegerTests.cpp -o $@ $(LDLIBS)
+
 clean:
-	rm -rf tests traffic-simulation
+	rm -f tests traffic-simulation

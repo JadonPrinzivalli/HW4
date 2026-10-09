@@ -1,18 +1,18 @@
 /* Sim.cpp */
 // Author: Programmer Intern Jordan (with help from my teammates! :P)
+// Speed improvements: ChatGPT assistance
 
 #include <iostream> // cout and stuff
 #include <algorithm> // 
 #include <vector> // for vectors
 #include <fstream> // to output to the HTML file easier
 #include <string> // due
-#include <unordered_map> // to track the time points when there are X num of cars present
+#include <unordered_map> // count how many seconds each car count occurred
 
 
 
 #include "Sim_Math.h" // poisson, binomial, percentage, crash_occurrence
 #include "TimeCode.h"
-#include "TimeCode_Tests.h"
 #include "BigInteger.h" // to count the total number of cars, which may be a really large value
 
 
@@ -29,20 +29,13 @@
 #define DURATION_10YRS 315569520L
 
 
-// A struct is like an object without any functions
-// These structs are used to keep some of the important data together
-struct data_point_pair{ // the data plotted on the chart
-	TimeCode t; // x-axis
-	int num_cars; // y-axis
-};
-
 struct results{ // All the "output" data from the simulation
 	TimeCode total_duration;
 	int road_capacity;
 	int new_car_rate;
 	int num_crashes;
 	std::string total_cars;
-	std::unordered_map<int, std::vector<TimeCode>> count_times_map;
+	std::unordered_map<int, unsigned long long> car_counts;
 
 	std::vector<int> x_data;
 	std::vector<int> y_data;
@@ -58,7 +51,8 @@ std::string TimeCodeVerboseString(TimeCode tc){
 
 
 // Function to generate the HTML file with embedded Plotly.js chart
-void generateHTMLoutput(results data, const std::string& filename = "plot.html") {
+// Use the existing results so the output functions do not copy all the data.
+void generateHTMLoutput(results& data, const std::string& filename = "plot.html") {
 
     std::ofstream html_file(filename);
 
@@ -89,12 +83,12 @@ void generateHTMLoutput(results data, const std::string& filename = "plot.html")
 	html_file << "<p>Number of Crashes: " << data.num_crashes << "</p>\n";
 	html_file << "<p>Total # of Cars Simulated: " << data.total_cars << "</p>\n";
 
-	html_file << "The number of moments (individual seconds) in which there were 0 cars: " << data.count_times_map[0].size() << "</p>\n";
-	html_file << "The number of moments (individual seconds) in which there was exactly 1 car: " << data.count_times_map[1].size() << "</p>\n";
-	html_file << "The number of moments (individual seconds) in which there were only 2 cars: " << data.count_times_map[2].size() << "</p>\n";
-	int sum = 0;
+	html_file << "The number of moments (individual seconds) in which there were 0 cars: " << data.car_counts[0] << "</p>\n";
+	html_file << "The number of moments (individual seconds) in which there was exactly 1 car: " << data.car_counts[1] << "</p>\n";
+	html_file << "The number of moments (individual seconds) in which there were only 2 cars: " << data.car_counts[2] << "</p>\n";
+	unsigned long long sum = 0;
 	for(int i = 0; i <= 10; i++){
-		sum = sum + data.count_times_map[i].size();
+		sum = sum + data.car_counts[i];
 	}
 	int per = percentage(sum, data.total_duration.GetTimeCodeAsSeconds());
 	html_file << "The number of moments (individual seconds) in which there were 10 cars or fewer: " << sum << " (about "  <<  per << "% of the entire simulation time.)" << "</p>\n";
@@ -168,7 +162,7 @@ void generateHTMLoutput(results data, const std::string& filename = "plot.html")
 
 
 
-void generateTerminalOutput(results data) {
+void generateTerminalOutput(results& data) {
 	std::cout << "\tduration: " << TimeCodeVerboseString(data.total_duration)
 		<< "\n\troad capacity: " << data.road_capacity
 		<< "\n\tavg new cars / second: " << data.new_car_rate
@@ -176,12 +170,12 @@ void generateTerminalOutput(results data) {
 		<< "\n\ttotal number of cars simulated: " << data.total_cars << std::endl;
 
 
-	std::cout << "\tThe number of moments (individual seconds) in which there were 0 cars: " << data.count_times_map[0].size() << std::endl;
-	std::cout << "\tThe number of moments (individual seconds) in which there was exactly 1 car: " << data.count_times_map[1].size() << std::endl;
-	std::cout << "\tThe number of moments (individual seconds) in which there were only 2 cars: " << data.count_times_map[2].size() << std::endl;
-	int sum = 0;
+	std::cout << "\tThe number of moments (individual seconds) in which there were 0 cars: " << data.car_counts[0] << std::endl;
+	std::cout << "\tThe number of moments (individual seconds) in which there was exactly 1 car: " << data.car_counts[1] << std::endl;
+	std::cout << "\tThe number of moments (individual seconds) in which there were only 2 cars: " << data.car_counts[2] << std::endl;
+	unsigned long long sum = 0;
 	for(int i = 0; i <= 10; i++){
-		sum = sum + data.count_times_map[i].size();
+		sum = sum + data.car_counts[i];
 	}
 	int per = percentage(sum, data.total_duration.GetTimeCodeAsSeconds());;
 	std::cout << "\tThe number of moments (individual seconds) in which there were 10 cars or fewer: " << sum << " (about "  <<  per << "% of the entire simulation time.)" << std::endl;
@@ -223,6 +217,16 @@ unsigned long long int parse_args(int argc, char* argv[]){
 }
 
 
+// Keep the same progress text, but write it in small batches instead of
+// flushing the terminal twice for every simulated second.
+void addProgress(int progress, std::string& progress_text){
+	progress_text += "\r" + std::to_string(progress) + "%";
+	if(progress_text.size() >= 8192){
+		std::cout << progress_text << std::flush;
+		progress_text.clear();
+	}
+}
+
 int main(int argc, char* argv[]) {
 	const unsigned long long int DURATION = parse_args(argc, argv);
 
@@ -244,22 +248,34 @@ int main(int argc, char* argv[]) {
 
 	std::cout << "Simulating traffic..." << std::endl;
 	BigInteger total_num_cars = BigInteger("0"); // number of cars that traveled, use BigInteger in case of integer overflow
-	std::vector<data_point_pair> data; // to store the data points
+	// The time is the vector index, so there is no need to store a TimeCode
+	// next to every car count. Reserving space also avoids growing copies.
+	std::vector<int> data; // to store the data points
+	data.reserve(DURATION);
+	std::string progress_text;
+	// A day's arrivals fit in this counter. Add them to BigInteger once a day
+	// instead of allocating new BigInteger objects every second.
+	unsigned long long daily_new_cars = 0;
 	int num_cars = 0; // number of cars (intially 0)
 	int crash_count = 0;
 	int crash_timer = 0; // cool-off period of a crash
 	for(TimeCode t = TimeCode(); t < dur; t = t + TimeCode(0, 0, 1)){
 		int progress = percentage(t.GetTimeCodeAsSeconds(), dur.GetTimeCodeAsSeconds());
-		std::cout << "\r" << progress << "%" << std::flush;
+		addProgress(progress, progress_text);
 
-		ALL();
+		// The TimeCode tests belong in ./tests, not inside every simulation step.
+		// They do not change the simulation or use its random numbers.
 
 		// --- New Cars Show Up (maybe) ---
 		int num_new_cars = poisson(new_car_rate);
 		if(num_cars >= CAP){
 			num_new_cars = 0; // road is full, no new cars
 		}
-		total_num_cars = total_num_cars + BigInteger(std::to_string(num_new_cars));
+		daily_new_cars += num_new_cars;
+		if((t.GetTimeCodeAsSeconds() + 1) % DURATION_1DAY == 0){
+			total_num_cars = total_num_cars + BigInteger(std::to_string(daily_new_cars));
+			daily_new_cars = 0;
+		}
 
 		// --- Existing Cars Might Leave ---
 		// Strong assumptions of model here!
@@ -296,27 +312,30 @@ int main(int argc, char* argv[]) {
 		}
 
 		// --- Track Data for Plotting Later ---
-		data.push_back({t, num_cars});
+		data.push_back(num_cars);
 		//cout << "Time: " << t.ToString() << "s   Num Cars: " << num_cars << endl;
 	}
+	std::cout << progress_text << std::flush;
+	progress_text.clear();
 	std::cout << std::endl;
+	// Include arrivals from the last partial day too.
+	if(daily_new_cars != 0){
+		total_num_cars = total_num_cars + BigInteger(std::to_string(daily_new_cars));
+	}
 
 
-	// Find the times at which certain amount of cars are present
+	// Count how many seconds each number of cars was present
 	std::cout << "Computing sample statistics..." << std::endl;
-	std::unordered_map<int, std::vector<TimeCode>> count_times;
+	// The output only uses how many times each car count occurred.
+	// A counter gives that answer without storing and copying timestamp lists.
+	std::unordered_map<int, unsigned long long> car_counts;
 	for(size_t i = 0; i < data.size(); i++){
 		int progress = percentage(i, data.size());
-		std::cout << "\r" << progress << "%" << std::flush;
-		data_point_pair cur = data[i];
-		if(count_times.find(cur.num_cars) != count_times.end()){
-			std::vector<TimeCode> times_list = count_times[cur.num_cars];
-			times_list.push_back(cur.t);
-			count_times[cur.num_cars] = times_list;
-		} else {
-			count_times[cur.num_cars] = std::vector<TimeCode>{cur.t};
-		}
+		addProgress(progress, progress_text);
+		car_counts[data[i]]++;
 	}
+	std::cout << progress_text << std::flush;
+	progress_text.clear();
 	std::cout << "\n---Simulation Finished---" << std::endl;
 
 
@@ -328,19 +347,23 @@ int main(int argc, char* argv[]) {
 	res.new_car_rate = new_car_rate;
 	res.num_crashes = crash_count;
 	res.total_cars = total_num_cars.ToString();
-	res.count_times_map = count_times;
+	res.car_counts = car_counts;
 
 	std::vector<int> x_data;
 	std::vector<int> y_data;
 	size_t start = 7200;
-	for(size_t i = 7200; i < start + DURATION_10MIN; i++){
-		x_data.push_back(data[i].t.GetTimeCodeAsSeconds());
-		y_data.push_back(data[i].num_cars);
+	for(size_t i = 7200; i < start + DURATION_10MIN && i < data.size(); i++){
+		x_data.push_back(i);
+		y_data.push_back(data[i]);
 	}
 	res.x_data = x_data;
 	res.y_data = y_data;
 	res.plotted_duration = TimeCode(0, 0, DURATION_10MIN);
-	res.plotted_duration.WasteTimeAndBeSlow();
+	// This const function only multiplies a local zero billions of times.
+	// Its result is discarded, so removing the call does not change output.
+	// Source: TimeCode.cpp and ChatGPT assistance
+	
+
 
 
 	generateTerminalOutput(res);

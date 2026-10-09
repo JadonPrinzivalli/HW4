@@ -31,24 +31,25 @@ void power_tests(){
 void poisson_tests(){
 	cout << "\tpoisson tests...";
 
-	//vector<int> samples;
-	unordered_map<int, int> freq_counts;
-	for(int i = 0; i < 100; i++){
-		int tmp = poisson(3);
-		//cout << "\t\t" << tmp << endl;
-		freq_counts[tmp]++;
+	// The old test required 3 to be the most common value in just 100 samples.
+	// That failed even in the unchanged starter on this Mac. Check the mean and
+	// variance of a larger sample instead: both should be close to lambda = 3.
+	// This only changes the test, not the simulation's random-number sequence.
+	// Sources: ChatGPT:
+	// https://www.itl.nist.gov/div898/handbook/eda/section3/eda366j.htm
+	const int sample_count = 10000;
+	double sum = 0.0;
+	double squared_sum = 0.0;
+	for(int i = 0; i < sample_count; i++){
+		int sample = poisson(3);
+		assert(sample >= 0);
+		sum += sample;
+		squared_sum += static_cast<double>(sample) * sample;
 	}
-
-	int most_frequent = -1;
-	int largest_count = INT_MIN;
-	for(const auto& p : freq_counts){
-		if(p.second > largest_count){
-			largest_count = p.second;
-			most_frequent = p.first;
-		}
-	}
-	
-	assert(most_frequent == 3);
+	double average = sum / sample_count;
+	double variance = squared_sum / sample_count - average * average;
+	assert(average > 2.85 && average < 3.15);
+	assert(variance > 2.7 && variance < 3.3);
 
 	cout << " PASSED!" << endl;
 }

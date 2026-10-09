@@ -15,7 +15,7 @@ TimeCode::TimeCode(const TimeCode& tc){
 
 void TimeCode::SetHours(unsigned int hours){
 	// An entire timecode may be negative
-	// e.g., tc1 = -4:23:64
+	// ex tc1 = -4:23:64
 	
 	// But calling tc1.setHours(h) with h = a negative
 	// number is none-sense and therefore not supported
